@@ -1,0 +1,15 @@
+(
+echo {
+echo   "name": "processo-ia-api",
+echo   "version": "1.0.0",
+echo   "type": "module",
+echo   "scripts": {
+echo     "start": "node src/index.js"
+echo   },
+echo   "dependencies": {
+echo     "express": "^4.19.2",
+echo     "axios": "^1.6.7",
+echo     "openai": "^4.28.0"
+echo   }
+echo }
+) > package.json
