@@ -1,132 +1,55 @@
 import axios from "axios";
 
-/**
- * TRAVA DE DUPLICIDADE
- * impede responder a mesma mensagem várias vezes
- */
-const mensagensProcessadas = new Set();
-
-/**
- * Extrai número do processo (CNJ) do texto
- */
-function extrairNumeroProcesso(texto = "") {
-  if (!texto) return null;
-
-  // aceita com ou sem pontos e traços
-  const regex =
-    /\d{7}[-.\s]?\d{2}[.\s]?\d{4}[.\s]?\d[.\s]?\d{2}[.\s]?\d{4}/;
-
-  const match = texto.match(regex);
-  if (!match) return null;
-
-  return match[0].replace(/\D/g, "");
-}
-
-/**
- * Monta resposta curta e jurídica
- */
-function montarResumo(dados) {
-  if (!dados?.bruto?.hits?.hits?.length) {
-    return "Não encontrei informações atualizadas sobre esse processo.";
-  }
-
-  const processos = dados.bruto.hits.hits;
-
-  const p = processos[0]._source;
-
-  const ultimaMovimentacao =
-    p.movimentos?.[p.movimentos.length - 1];
-
-  return (
-    `Aqui está a situação atual do seu processo:\n\n` +
-    `• *Tribunal:* ${p.tribunal}\n` +
-    `• *Classe:* ${p.classe?.nome}\n` +
-    `• *Sistema:* ${p.sistema?.nome}\n` +
-    `• *Data de ajuizamento:* ${p.dataAjuizamento?.slice(0, 8)}\n` +
-    `• *Última movimentação:* ${ultimaMovimentacao?.nome || "Não informada"}\n` +
-    `• *Data da última movimentação:* ${
-      ultimaMovimentacao?.dataHora?.slice(0, 10) || "—"
-    }\n\n` +
-    `Se quiser, posso acompanhar esse processo e avisar quando houver novidades.`
-  );
-}
-
-/**
- * WEBHOOK PRINCIPAL
- */
 export async function webhookWhatsApp(req, res) {
   try {
-    const { data } = req.body;
+    res.json({ ok: true });
 
-    if (!data?.message?.conversation) {
-      return res.sendStatus(200);
-    }
+    const body = req.body;
 
-    const messageId = data.key.id;
+    if (!body?.data?.message?.conversation) return;
 
-    // 🔒 trava duplicidade
-    if (mensagensProcessadas.has(messageId)) {
-      return res.sendStatus(200);
-    }
+    const mensagem = body.data.message.conversation;
+    const fromMe = body.data.key.fromMe;
+    const number = body.data.key.remoteJid;
 
-    mensagensProcessadas.add(messageId);
+    // ❌ evita loop infinito
+    if (fromMe) return;
 
-    setTimeout(() => {
-      mensagensProcessadas.delete(messageId);
-    }, 120000);
+    console.log("📩 Mensagem recebida:", mensagem);
 
-    const textoCliente = data.message.conversation;
-    const numeroCliente = data.key.remoteJid;
-
-    console.log("📩 Mensagem recebida:", textoCliente);
-
-    const numeroProcesso = extrairNumeroProcesso(textoCliente);
-
-    if (!numeroProcesso) {
-      await axios.post(
-        `https://evo.upandco.com.br/message/sendText/up-company`,
-        {
-          number: numeroCliente,
-          text: "Para consultar seu processo, preciso que me informe o número completo, por favor.",
-        },
-        {
-          headers: {
-            apikey: process.env.EVOLUTION_API_KEY,
-          },
-        }
-      );
-
-      return res.sendStatus(200);
-    }
-
-    // 🔎 consulta API de processos
-    const resposta = await axios.post(
-      "https://chatwoot-processo-ai-api.2lrt7z.easypanel.host/processo",
+    // 👉 chama o agente jurídico
+    const agenteResponse = await axios.post(
+      "http://localhost:3000/agente",
       {
-        numero: numeroProcesso,
-        tribunal: "tre-rn",
+        mensagem
+      },
+      {
+        headers: {
+          "Content-Type": "application/json"
+        }
       }
     );
 
-    const textoResposta = montarResumo(resposta.data);
+    const resposta = agenteResponse.data?.resposta;
 
-    // 📤 responde no WhatsApp
+    if (!resposta) return;
+
+    // 📤 envia resposta ao WhatsApp
     await axios.post(
-      `https://evo.upandco.com.br/message/sendText/up-company`,
+      `${process.env.EVOLUTION_URL}/message/sendText/${process.env.EVOLUTION_INSTANCE}`,
       {
-        number: numeroCliente,
-        text: textoResposta,
+        number,
+        text: resposta
       },
       {
         headers: {
           apikey: process.env.EVOLUTION_API_KEY,
-        },
+          "Content-Type": "application/json"
+        }
       }
     );
 
-    return res.sendStatus(200);
   } catch (error) {
-    console.error("❌ Erro webhook:", error?.message);
-    return res.sendStatus(200);
+    console.error("❌ Erro webhook:", error.message);
   }
 }
