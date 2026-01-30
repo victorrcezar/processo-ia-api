@@ -2,7 +2,11 @@ import axios from "axios";
 
 export async function webhookWhatsApp(req, res) {
   try {
+    // responde imediatamente
     res.json({ success: true });
+
+    // aceita apenas messages.upsert
+    if (req.body?.event !== "messages.upsert") return;
 
     const body = req.body;
 
@@ -12,16 +16,12 @@ export async function webhookWhatsApp(req, res) {
     const number = body.data.key.remoteJid;
     const fromMe = body.data.key.fromMe;
 
+    // evita loop infinito
     if (fromMe) return;
 
     console.log("📩 Mensagem recebida:", mensagem);
 
-    // 🔍 LOG DE SEGURANÇA
-    console.log("🔑 API KEY EXISTS:", !!process.env.EVOLUTION_API_KEY);
-    console.log("🏷 INSTANCE:", process.env.EVOLUTION_INSTANCE);
-    console.log("🌐 URL:", process.env.EVOLUTION_URL);
-
-    // 👉 chama o agente
+    // chama o agente jurídico
     const agente = await axios.post(
       "https://chatwoot-processo-ai-api.2lrt7z.easypanel.host/agente",
       { mensagem },
@@ -29,10 +29,9 @@ export async function webhookWhatsApp(req, res) {
     );
 
     const resposta = agente.data?.resposta;
-
     if (!resposta) return;
 
-    // ✅ ENVIO WHATSAPP (igual ao CURL)
+    // envia ao WhatsApp
     await axios.post(
       `${process.env.EVOLUTION_URL}/message/sendText/${process.env.EVOLUTION_INSTANCE}`,
       {
