@@ -1,60 +1,132 @@
 import axios from "axios";
-import { agenteProcesso } from "./agente.js";
 
-const PALAVRAS_CHAVE = [
-  "processo",
-  "andamento",
-  "novidade",
-  "situação",
-  "meu processo",
-  "como está",
-  "andou",
-  "andamento do processo"
-];
+/**
+ * TRAVA DE DUPLICIDADE
+ * impede responder a mesma mensagem várias vezes
+ */
+const mensagensProcessadas = new Set();
 
-function contemPalavraChave(texto) {
-  const msg = texto.toLowerCase();
-  return PALAVRAS_CHAVE.some(p => msg.includes(p));
+/**
+ * Extrai número do processo (CNJ) do texto
+ */
+function extrairNumeroProcesso(texto = "") {
+  if (!texto) return null;
+
+  // aceita com ou sem pontos e traços
+  const regex =
+    /\d{7}[-.\s]?\d{2}[.\s]?\d{4}[.\s]?\d[.\s]?\d{2}[.\s]?\d{4}/;
+
+  const match = texto.match(regex);
+  if (!match) return null;
+
+  return match[0].replace(/\D/g, "");
 }
 
+/**
+ * Monta resposta curta e jurídica
+ */
+function montarResumo(dados) {
+  if (!dados?.bruto?.hits?.hits?.length) {
+    return "Não encontrei informações atualizadas sobre esse processo.";
+  }
+
+  const processos = dados.bruto.hits.hits;
+
+  const p = processos[0]._source;
+
+  const ultimaMovimentacao =
+    p.movimentos?.[p.movimentos.length - 1];
+
+  return (
+    `Aqui está a situação atual do seu processo:\n\n` +
+    `• *Tribunal:* ${p.tribunal}\n` +
+    `• *Classe:* ${p.classe?.nome}\n` +
+    `• *Sistema:* ${p.sistema?.nome}\n` +
+    `• *Data de ajuizamento:* ${p.dataAjuizamento?.slice(0, 8)}\n` +
+    `• *Última movimentação:* ${ultimaMovimentacao?.nome || "Não informada"}\n` +
+    `• *Data da última movimentação:* ${
+      ultimaMovimentacao?.dataHora?.slice(0, 10) || "—"
+    }\n\n` +
+    `Se quiser, posso acompanhar esse processo e avisar quando houver novidades.`
+  );
+}
+
+/**
+ * WEBHOOK PRINCIPAL
+ */
 export async function webhookWhatsApp(req, res) {
   try {
-    const evento = req.body;
+    const { data } = req.body;
 
-    if (!evento?.data?.message?.conversation) {
+    if (!data?.message?.conversation) {
       return res.sendStatus(200);
     }
 
-    const texto = evento.data.message.conversation;
-    const telefone = evento.data.key.remoteJid;
-    const instance = evento.instance;
+    const messageId = data.key.id;
 
-    // se não for assunto de processo, ignora
-    if (!contemPalavraChave(texto)) {
+    // 🔒 trava duplicidade
+    if (mensagensProcessadas.has(messageId)) {
       return res.sendStatus(200);
     }
 
-    // chama o agente
-    const resposta = await agenteProcesso(texto);
+    mensagensProcessadas.add(messageId);
 
-    // envia resposta pelo Evolution
-    await axios.post(
-      `${process.env.EVOLUTION_URL}/message/sendText/${instance}`,
-      {
-        number: telefone,
-        text: resposta
-      },
-      {
-        headers: {
-          apikey: process.env.EVOLUTION_APIKEY
+    setTimeout(() => {
+      mensagensProcessadas.delete(messageId);
+    }, 120000);
+
+    const textoCliente = data.message.conversation;
+    const numeroCliente = data.key.remoteJid;
+
+    console.log("📩 Mensagem recebida:", textoCliente);
+
+    const numeroProcesso = extrairNumeroProcesso(textoCliente);
+
+    if (!numeroProcesso) {
+      await axios.post(
+        `https://evo.upandco.com.br/message/sendText/up-company`,
+        {
+          number: numeroCliente,
+          text: "Para consultar seu processo, preciso que me informe o número completo, por favor.",
+        },
+        {
+          headers: {
+            apikey: process.env.EVOLUTION_API_KEY,
+          },
         }
+      );
+
+      return res.sendStatus(200);
+    }
+
+    // 🔎 consulta API de processos
+    const resposta = await axios.post(
+      "https://chatwoot-processo-ai-api.2lrt7z.easypanel.host/processo",
+      {
+        numero: numeroProcesso,
+        tribunal: "tre-rn",
       }
     );
 
-    res.sendStatus(200);
+    const textoResposta = montarResumo(resposta.data);
 
-  } catch (err) {
-    console.error(err);
-    res.sendStatus(200);
+    // 📤 responde no WhatsApp
+    await axios.post(
+      `https://evo.upandco.com.br/message/sendText/up-company`,
+      {
+        number: numeroCliente,
+        text: textoResposta,
+      },
+      {
+        headers: {
+          apikey: process.env.EVOLUTION_API_KEY,
+        },
+      }
+    );
+
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error("❌ Erro webhook:", error?.message);
+    return res.sendStatus(200);
   }
 }
