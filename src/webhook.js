@@ -1,12 +1,22 @@
 import axios from "axios";
 
+/**
+ * Guarda IDs de mensagens já processadas
+ * (evita duplicação causada pela Evolution)
+ */
 const mensagensProcessadas = new Set();
 
 export async function webhookWhatsApp(req, res) {
   try {
+    /**
+     * ⚠️ Responde imediatamente para a Evolution
+     * evita reenvio automático
+     */
     res.status(200).json({ ok: true });
 
-    // ✅ PROCESSA SOMENTE messages.upsert
+    /**
+     * ✅ Aceita somente messages.upsert
+     */
     if (req.body?.event !== "messages.upsert") return;
 
     const data = req.body.data;
@@ -16,10 +26,14 @@ export async function webhookWhatsApp(req, res) {
     const messageId = data.key?.id;
     const fromMe = data.key?.fromMe;
 
-    // ❌ ignora mensagens enviadas pelo bot
+    /**
+     * ❌ Ignora mensagens enviadas pelo próprio bot
+     */
     if (fromMe) return;
 
-    // ❌ ignora duplicadas
+    /**
+     * ❌ Ignora mensagens duplicadas
+     */
     if (mensagensProcessadas.has(messageId)) {
       console.log("⏭ Mensagem duplicada ignorada:", messageId);
       return;
@@ -27,6 +41,9 @@ export async function webhookWhatsApp(req, res) {
 
     mensagensProcessadas.add(messageId);
 
+    /**
+     * 📩 Extrai texto
+     */
     const texto =
       data.message?.conversation ||
       data.message?.extendedTextMessage?.text;
@@ -35,21 +52,29 @@ export async function webhookWhatsApp(req, res) {
 
     console.log("📩 Mensagem recebida:", texto);
 
-    // ===============================
-    // CHAMA SEU AGENTE
-    // ===============================
+    /**
+     * ===============================
+     * 🤖 CHAMA AGENTE JURÍDICO
+     * ===============================
+     */
     const agente = await axios.post(
       "https://chatwoot-processo-ai-api.2lrt7z.easypanel.host/agente",
       { mensagem: texto },
-      { headers: { "Content-Type": "application/json" } }
+      {
+        headers: {
+          "Content-Type": "application/json"
+        }
+      }
     );
 
     const resposta = agente.data?.resposta;
     if (!resposta) return;
 
-    // ===============================
-    // ENVIA RESPOSTA
-    // ===============================
+    /**
+     * ===============================
+     * 📤 ENVIA MENSAGEM AO WHATSAPP
+     * ===============================
+     */
     await axios.post(
       `${process.env.EVOLUTION_URL}/message/sendText/${process.env.EVOLUTION_INSTANCE}`,
       {
@@ -58,13 +83,16 @@ export async function webhookWhatsApp(req, res) {
       },
       {
         headers: {
-          apikey: process.env.EVOLUTION_APIKEY,
+          apikey: process.env.EVOLUTION_API_KEY,
           "Content-Type": "application/json"
         }
       }
     );
 
-  } catch (err) {
-    console.error("❌ Erro webhook:", err?.response?.data || err.message);
+  } catch (error) {
+    console.error(
+      "❌ Erro webhook:",
+      error?.response?.data || error.message
+    );
   }
 }
