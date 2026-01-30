@@ -1,52 +1,70 @@
 import axios from "axios";
 
+const mensagensProcessadas = new Set();
+
 export async function webhookWhatsApp(req, res) {
   try {
-    // responde imediatamente
-    res.json({ success: true });
+    res.status(200).json({ ok: true });
 
-    // aceita apenas messages.upsert
+    // ✅ PROCESSA SOMENTE messages.upsert
     if (req.body?.event !== "messages.upsert") return;
 
-    const body = req.body;
+    const data = req.body.data;
 
-    if (!body?.data?.message?.conversation) return;
+    if (!data?.message) return;
 
-    const mensagem = body.data.message.conversation;
-    const number = body.data.key.remoteJid;
-    const fromMe = body.data.key.fromMe;
+    const messageId = data.key?.id;
+    const fromMe = data.key?.fromMe;
 
-    // evita loop infinito
+    // ❌ ignora mensagens enviadas pelo bot
     if (fromMe) return;
 
-    console.log("📩 Mensagem recebida:", mensagem);
+    // ❌ ignora duplicadas
+    if (mensagensProcessadas.has(messageId)) {
+      console.log("⏭ Mensagem duplicada ignorada:", messageId);
+      return;
+    }
 
-    // chama o agente jurídico
+    mensagensProcessadas.add(messageId);
+
+    const texto =
+      data.message?.conversation ||
+      data.message?.extendedTextMessage?.text;
+
+    if (!texto) return;
+
+    console.log("📩 Mensagem recebida:", texto);
+
+    // ===============================
+    // CHAMA SEU AGENTE
+    // ===============================
     const agente = await axios.post(
       "https://chatwoot-processo-ai-api.2lrt7z.easypanel.host/agente",
-      { mensagem },
+      { mensagem: texto },
       { headers: { "Content-Type": "application/json" } }
     );
 
     const resposta = agente.data?.resposta;
     if (!resposta) return;
 
-    // envia ao WhatsApp
+    // ===============================
+    // ENVIA RESPOSTA
+    // ===============================
     await axios.post(
       `${process.env.EVOLUTION_URL}/message/sendText/${process.env.EVOLUTION_INSTANCE}`,
       {
-        number,
+        number: data.key.remoteJid,
         text: resposta
       },
       {
         headers: {
-          apikey: process.env.EVOLUTION_API_KEY,
+          apikey: process.env.EVOLUTION_APIKEY,
           "Content-Type": "application/json"
         }
       }
     );
 
-  } catch (error) {
-    console.error("❌ Erro webhook:", error?.response?.data || error.message);
+  } catch (err) {
+    console.error("❌ Erro webhook:", err?.response?.data || err.message);
   }
 }
